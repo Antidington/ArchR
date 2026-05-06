@@ -13,7 +13,11 @@ addReproduciblePeakSet(
   maxPeaks = 150000,
   minCells = 25,
   excludeChr = c("chrM", "chrY"),
-  pathToMacs2 = if (tolower(peakMethod) == "macs2") findMacs2() else NULL,
+  pathToMacs2 = if (tolower(peakMethod) == "macs2" && is.null(macs2SingularityImage)) findMacs2() else NULL,
+  macs2SingularityImage = NULL,
+  pathToSingularity = "singularity",
+  singularityArgs = NULL,
+  macs2InContainer = "macs2",
   genomeSize = NULL,
   shift = -75,
   extsize = 150,
@@ -54,7 +58,15 @@ This is important to allow for exclusion of pseudo-bulk replicates derived from 
 
 \item{excludeChr}{A character vector containing the \code{seqnames} of the chromosomes that should be excluded from peak calling.}
 
-\item{pathToMacs2}{The full path to the MACS2 executable.}
+\item{pathToMacs2}{The full path to the MACS2 executable. This is only required when \code{macs2SingularityImage} is \code{NULL}.}
+
+\item{macs2SingularityImage}{The path to a Singularity image containing MACS2. If provided, ArchR will run MACS2 with \code{singularity exec}.}
+
+\item{pathToSingularity}{The full path to the Singularity executable.}
+
+\item{singularityArgs}{A character vector of additional arguments to pass to \code{singularity exec}, such as bind mounts.}
+
+\item{macs2InContainer}{The MACS2 executable name or path inside the Singularity container.}
 
 \item{genomeSize}{The genome size to be used for MACS2 peak calling (see MACS2 documentation). This is required if genome is not hg19, hg38, mm9, or mm10.}
 
@@ -112,5 +124,13 @@ proj <- addReproduciblePeakSet(proj, peakMethod = "tiles")
 
 # Add Peak Matrix Macs2 (Preferred)
 proj <- addReproduciblePeakSet(proj, peakMethod = "macs2")
+
+# Add Peak Matrix Macs2 with Singularity
+proj <- addReproduciblePeakSet(
+  proj,
+  peakMethod = "macs2",
+  macs2SingularityImage = "/path/to/macs2.sif",
+  singularityArgs = c("--bind", "/project:/project")
+)
 
 }

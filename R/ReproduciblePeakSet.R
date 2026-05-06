@@ -19,7 +19,11 @@
 #' @param minCells The minimum allowable number of unique cells that was used to create the coverage files on which peaks are called.
 #' This is important to allow for exclusion of pseudo-bulk replicates derived from very low cell numbers.
 #' @param excludeChr A character vector containing the `seqnames` of the chromosomes that should be excluded from peak calling.
-#' @param pathToMacs2 The full path to the MACS2 executable.
+#' @param pathToMacs2 The full path to the MACS2 executable. This is only required when `macs2SingularityImage` is `NULL`.
+#' @param macs2SingularityImage The path to a Singularity image containing MACS2. If provided, ArchR will run MACS2 with `singularity exec`.
+#' @param pathToSingularity The full path to the Singularity executable.
+#' @param singularityArgs A character vector of additional arguments to pass to `singularity exec`, such as bind mounts.
+#' @param macs2InContainer The MACS2 executable name or path inside the Singularity container.
 #' @param genomeSize The genome size to be used for MACS2 peak calling (see MACS2 documentation). This is required if genome is not hg19, hg38, mm9, or mm10.
 #' @param shift The number of basepairs to shift each Tn5 insertion. When combined with `extsize` this allows you to create proper fragments,
 #' centered at the Tn5 insertion site, for use with MACS2 (see MACS2 documentation).
@@ -57,6 +61,14 @@
 #' # Add Peak Matrix Macs2 (Preferred)
 #' proj <- addReproduciblePeakSet(proj, peakMethod = "macs2")
 #'
+#' # Add Peak Matrix Macs2 with Singularity
+#' proj <- addReproduciblePeakSet(
+#'   proj,
+#'   peakMethod = "macs2",
+#'   macs2SingularityImage = "/path/to/macs2.sif",
+#'   singularityArgs = c("--bind", "/project:/project")
+#' )
+#'
 #' @export
 addReproduciblePeakSet <- function(
 	ArchRProj = NULL,
@@ -67,7 +79,11 @@ addReproduciblePeakSet <- function(
 	maxPeaks = 150000,
 	minCells = 25,
 	excludeChr = c("chrM","chrY"),
-	pathToMacs2 = if(tolower(peakMethod)=="macs2") findMacs2() else NULL,
+	pathToMacs2 = if(tolower(peakMethod)=="macs2" && is.null(macs2SingularityImage)) findMacs2() else NULL,
+	macs2SingularityImage = NULL,
+	pathToSingularity = "singularity",
+	singularityArgs = NULL,
+	macs2InContainer = "macs2",
 	genomeSize = NULL, 
 	shift = -75, 
 	extsize = 150, 
@@ -96,14 +112,24 @@ addReproduciblePeakSet <- function(
 	.validInput(input = excludeChr, name = "excludeChr", valid = c("character", "null"))
 
 	if(tolower(peakMethod) == "macs2"){
-		.validInput(input = pathToMacs2, name = "pathToMacs2", valid = c("character"))
+		.validInput(input = macs2SingularityImage, name = "macs2SingularityImage", valid = c("character", "null"))
+		.validInput(input = pathToMacs2, name = "pathToMacs2", valid = c("character", "null"))
+		.validInput(input = pathToSingularity, name = "pathToSingularity", valid = c("character"))
+		.validInput(input = singularityArgs, name = "singularityArgs", valid = c("character", "null"))
+		.validInput(input = macs2InContainer, name = "macs2InContainer", valid = c("character"))
 		.validInput(input = genomeSize, name = "genomeSize", valid = c("character", "numeric", "null"))
 		.validInput(input = shift, name = "shift", valid = c("integer"))
 		.validInput(input = extsize, name = "extsize", valid = c("integer"))
 		.validInput(input = method, name = "method", valid = c("character"))
 		.validInput(input = additionalParams, name = "additionalParams", valid = c("character"))
 		.validInput(input = extendSummits, name = "extendSummits", valid = c("integer"))
-		.checkMacs2Options(pathToMacs2) #Check Macs2 Version		
+		.checkMacs2Options(
+			pathToMacs2 = pathToMacs2,
+			macs2SingularityImage = macs2SingularityImage,
+			pathToSingularity = pathToSingularity,
+			singularityArgs = singularityArgs,
+			macs2InContainer = macs2InContainer
+		) #Check Macs2 Version		
 	}else if(tolower(peakMethod) == "tiles"){
 
 	}else{
@@ -142,7 +168,11 @@ addReproduciblePeakSet <- function(
 
 		.logMessage("Calling Peaks with Macs2", logFile = logFile)
 
-		utility <- .checkPath(pathToMacs2)
+		if(is.null(macs2SingularityImage)){
+			utility <- .checkPath(pathToMacs2)
+		}else{
+			utility <- .checkPath(pathToSingularity)
+		}
 
 		coverageMetadata <- .getCoverageMetadata(ArchRProj = ArchRProj, groupBy = groupBy, minCells = minCells)
 		coverageParams <- .getCoverageParams(ArchRProj = ArchRProj, groupBy = groupBy)
@@ -198,14 +228,18 @@ addReproduciblePeakSet <- function(
 		args$bedDir <- outBedDir
 		args$excludeChr <- excludeChr
 		args$peakParams <- list(
-				pathToMacs2 = pathToMacs2,
-				genomeSize = genomeSize, 
-				shift = shift, 
-				extsize = extsize, 
-				cutOff = cutOff, 
-				method = method,
-				additionalParams = additionalParams
-			)
+			pathToMacs2 = pathToMacs2,
+			macs2SingularityImage = macs2SingularityImage,
+			pathToSingularity = pathToSingularity,
+			singularityArgs = singularityArgs,
+			macs2InContainer = macs2InContainer,
+			genomeSize = genomeSize, 
+			shift = shift, 
+			extsize = extsize, 
+			cutOff = cutOff, 
+			method = method,
+			additionalParams = additionalParams
+		)
 		args$parallelParam <- parallelParam
 		args$threads <- threads
 		args$logFile <- logFile
@@ -765,6 +799,10 @@ addReproduciblePeakSet <- function(
 .callSummitsMACS2 <- function(
 	bedFile = NULL,
 	pathToMacs2 = "macs2",
+	macs2SingularityImage = NULL,
+	pathToSingularity = "singularity",
+	singularityArgs = NULL,
+	macs2InContainer = "macs2",
 	genomeSize = 2.7e9, 
 	shift = -75, 
 	extsize = 150, 
@@ -776,7 +814,11 @@ addReproduciblePeakSet <- function(
 
 	stopifnot(tolower(method) %in% c("p","q"))
 	stopifnot(!is.null(genomeSize))
-	utility <- .checkPath(pathToMacs2)
+	utility <- .checkMacs2Runner(
+		pathToMacs2 = pathToMacs2,
+		macs2SingularityImage = macs2SingularityImage,
+		pathToSingularity = pathToSingularity
+	)
 
 	#Output Files
 	bedName <- gsub("\\.insertions.bed", "", bedFile)
@@ -798,11 +840,20 @@ addReproduciblePeakSet <- function(
 		cmd <- sprintf("%s -q %s", cmd , cutOff)
 	}
 
-	.logMessage(paste0("Running Macs2 with Params : macs2 ", cmd), logFile = logFile)
+	macs2Runner <- .macs2Runner(
+		macs2Args = cmd,
+		pathToMacs2 = pathToMacs2,
+		macs2SingularityImage = macs2SingularityImage,
+		pathToSingularity = pathToSingularity,
+		singularityArgs = singularityArgs,
+		macs2InContainer = macs2InContainer
+	)
+
+	.logMessage(paste0("Running Macs2 with Params : ", macs2Runner$logCommand), logFile = logFile)
 
 	#run <- system2(pathToMacs2, cmd, wait=TRUE, stdout=NULL, stderr=NULL)
 	#If summitsFile doesnt exists print error message from terminal
-	run <- suppressWarnings(system2(pathToMacs2, cmd, wait=TRUE, stdout=NULL, stderr=TRUE))
+	run <- suppressWarnings(system2(macs2Runner$command, macs2Runner$args, wait=TRUE, stdout=NULL, stderr=TRUE))
 	if(!file.exists(summitsFile)){
 		err <- paste0(run, collapse="\n")
 		.message2(err)
@@ -820,14 +871,79 @@ addReproduciblePeakSet <- function(
 
 }
 
-.checkMacs2Options <- function(path){
-	o <- system2(path, "callpeak -h", stdout = TRUE, stderr = TRUE)
-	v <- system2(path, " --version", stdout = TRUE, stderr = TRUE)
+.macs2Runner <- function(
+	macs2Args = NULL,
+	pathToMacs2 = "macs2",
+	macs2SingularityImage = NULL,
+	pathToSingularity = "singularity",
+	singularityArgs = NULL,
+	macs2InContainer = "macs2"
+	){
+
+	if(is.null(macs2SingularityImage)){
+		list(
+			command = pathToMacs2,
+			args = macs2Args,
+			logCommand = paste(pathToMacs2, macs2Args)
+		)
+	}else{
+		singularityArgs <- c("exec", singularityArgs, macs2SingularityImage, macs2InContainer, macs2Args)
+		list(
+			command = pathToSingularity,
+			args = paste(singularityArgs, collapse = " "),
+			logCommand = paste(pathToSingularity, paste(singularityArgs, collapse = " "))
+		)
+	}
+
+}
+
+.checkMacs2Runner <- function(
+	pathToMacs2 = NULL,
+	macs2SingularityImage = NULL,
+	pathToSingularity = "singularity"
+	){
+	if(is.null(macs2SingularityImage)){
+		.checkPath(pathToMacs2)
+	}else{
+		.checkPath(pathToSingularity)
+	}
+}
+
+.checkMacs2Options <- function(
+	pathToMacs2 = "macs2",
+	macs2SingularityImage = NULL,
+	pathToSingularity = "singularity",
+	singularityArgs = NULL,
+	macs2InContainer = "macs2"
+	){
+	utility <- .checkMacs2Runner(
+		pathToMacs2 = pathToMacs2,
+		macs2SingularityImage = macs2SingularityImage,
+		pathToSingularity = pathToSingularity
+	)
+	helpRunner <- .macs2Runner(
+		macs2Args = "callpeak -h",
+		pathToMacs2 = pathToMacs2,
+		macs2SingularityImage = macs2SingularityImage,
+		pathToSingularity = pathToSingularity,
+		singularityArgs = singularityArgs,
+		macs2InContainer = macs2InContainer
+	)
+	versionRunner <- .macs2Runner(
+		macs2Args = " --version",
+		pathToMacs2 = pathToMacs2,
+		macs2SingularityImage = macs2SingularityImage,
+		pathToSingularity = pathToSingularity,
+		singularityArgs = singularityArgs,
+		macs2InContainer = macs2InContainer
+	)
+	o <- system2(helpRunner$command, helpRunner$args, stdout = TRUE, stderr = TRUE)
+	v <- system2(versionRunner$command, versionRunner$args, stdout = TRUE, stderr = TRUE)
 	check <- any(grepl("--shift SHIFT", o))
 	if(check){
 		return(invisible(0))
 	}else{
-		stop("Macs2 Path (", path, ") is out of date (version ", v, ") and does not have --shift option.\n  Please update (https://github.com/taoliu/MACS) and provide new path!")
+		stop("Macs2 command (", helpRunner$logCommand, ") is out of date (version ", v, ") and does not have --shift option.\n  Please update (https://github.com/taoliu/MACS) and provide a new path or container!")
 	}
 }
 
